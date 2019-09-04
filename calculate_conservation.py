@@ -21,6 +21,8 @@ JENSE_SHANNON_DIVERGANCE_DIR = "./conservation_code/"
 
 MIN_SEQUENCE_COUNT = 50
 
+time_end_before = None
+
 
 def _read_arguments() -> typing.Dict[str, str]:
     parser = argparse.ArgumentParser(
@@ -31,6 +33,9 @@ def _read_arguments() -> typing.Dict[str, str]:
     parser.add_argument(
         "--output", required=True,
         description="Output json lines file.")
+    parser.add_argument(
+        "--time-limit", default=None, type=int,
+        description="Soft time limit in seconds.")
     return vars(parser.parse_args())
 
 
@@ -38,12 +43,20 @@ def main(arguments):
     init_logging()
 
     time_start = time.time()
+    set_time_out(arguments)
+
     working_root_dir = tempfile.mkdtemp("", "conservation-")
     logging.info("Processing file: %s", arguments["input"])
 
+    if os.path.exists(arguments["output"]):
+        logging.info("Output file already exists.")
+        return
+
     try:
         input_sequences = _iterate_fasta_file(arguments["input"], rstrip)
-        with open(arguments["output"], "w", encoding="utf-8") as out_steam:
+        # We write to temp file and then move only once done.
+        temp_output = arguments["output"] + ".tmp"
+        with open(temp_output, "w", encoding="utf-8") as out_steam:
             for index, (header, sequence) in enumerate(input_sequences):
                 working_dir = \
                     os.path.join(working_root_dir, str(index).zfill(6))
@@ -55,6 +68,7 @@ def main(arguments):
                     "conservation": scores
                 }, out_steam)
                 out_steam.write("\n")
+        os.rename(temp_output, arguments["output"])
     finally:
         logging.info("Execution time: %1.2f s", time.time() - time_start)
         shutil.rmtree(working_root_dir, ignore_errors=True)
@@ -65,6 +79,13 @@ def init_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S")
+
+
+def set_time_out(arguments):
+    if arguments["time-limit"] is None:
+        return
+    global time_end_before
+    time_end_before = time.time() + arguments["time-limit"]
 
 
 def rstrip(string: str) -> str:
@@ -91,7 +112,8 @@ def _iterate_fasta_file(input_file: str, on_line=lambda line: line) \
         yield header, sequence
 
 
-def compute_conservation(sequence: str, header: str, working_dir: str):
+def compute_conservation(
+        sequence: str, header: str, working_dir: str, timeout: int):
     pdb_file = os.path.join(working_dir, "input-sequence.fasta")
     _save_sequence_to_pdb(MARK_SEQUENCE_PREFIX + header, sequence, pdb_file)
 
@@ -153,8 +175,20 @@ def _execute_psiblast(pdb_file: str, output_file: str, database: str) -> None:
     output_format = "6 sallseqid qcovs pident"
     cmd = "{} < {} -db {} -outfmt '{}' -evalue 1e-5 > {}".format(
         PSIBLAST_CMD, pdb_file, database, output_format, output_file)
-    logging.debug("Executing command:\n%s", cmd)
-    subprocess.call(cmd, shell=True, env=os.environ.copy())
+    logging.debug("Executing BLAST ...")
+    _execute(cmd)
+
+
+def _execute(command: str):
+    if time_end_before is None:
+        logging.debug("Executing command:\n%s", command)
+        subprocess.run(command, shell=True, env=os.environ.copy())
+        return
+    if time_end_before < time.time():
+        raise TimeoutError()
+    timeout = time_end_before - time.time()
+    logging.debug("Executing with timeout: %s command:\n%s", timeout, command)
+    subprocess.run(command, shell=True, env=os.environ.copy(), timeout=timeout)
 
 
 def _filter_psiblast_file(input_file: str, output_file: str):
@@ -176,18 +210,18 @@ def _filter_condition(coverage: float, identity: float) -> bool:
 
 def _execute_blastdbcmd(
         psiblast_output_file: str, sequence_file: str, database: str) -> None:
-    blast_cmd = "{} -db {} -entry_batch {} > {}".format(
+    cmd = "{} -db {} -entry_batch {} > {}".format(
         BLASTDBCMD_CMD, database, psiblast_output_file,
         sequence_file)
-    logging.debug("Executing command:\n%s", blast_cmd)
-    subprocess.call(blast_cmd, shell=True, env=os.environ.copy())
+    logging.debug("Executing BLAST ...")
+    _execute(cmd)
 
 
 def _execute_cdhit(input_file: str, output_file: str, log_file: str) -> None:
-    cdhit_cmd = "{} -i {} -o {} > {}".format(
+    cmd = "{} -i {} -o {} > {}".format(
         CDHIT_CMD, input_file, output_file, log_file)
-    logging.debug("Executing command:\n%s", cdhit_cmd)
-    subprocess.call(cdhit_cmd, shell=True)
+    logging.debug("Executing CD-HIT ..")
+    _execute(cmd)
 
 
 def _enough_blast_results(fasta_file: str, min_count: int) -> bool:
@@ -204,11 +238,10 @@ def _execute_muscle(
         -> None:
     muscle_input = os.path.join(working_dir, "muscle-input")
     _merge_files([sequence_file, pdb_file], muscle_input)
-    muscle_cmd = "cat {} | {} -quiet > {}".format(
+    cmd = "cat {} | {} -quiet > {}".format(
         muscle_input, MUSCLE_CMD, output_file)
     logging.info("Executing muscle ...")
-    logging.debug("Executing command:\n%s", muscle_cmd)
-    subprocess.call(muscle_cmd, shell=True)
+    _execute(cmd)
 
 
 def _merge_files(input_files: typing.List[str], output_file: str) -> None:
@@ -250,7 +283,7 @@ def _execute_jensen_shannon_divergence(
         os.path.abspath(output_file))
     logging.info("Executing Jense Shannon Divergence script ...")
     logging.debug("Executing command:\n%s", cmd)
-    subprocess.call(cmd, shell=True)
+    _execute(cmd)
     return _load_jensen_shannon_divergence_result(output_file)
 
 
