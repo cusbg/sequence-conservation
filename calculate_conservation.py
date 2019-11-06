@@ -180,6 +180,7 @@ def _execute_psiblast(pdb_file: str, output_file: str, database: str) -> None:
 
 
 def _execute(command: str):
+    global time_end_before
     if time_end_before is None:
         logging.debug("Executing command:\n%s", command)
         subprocess.run(command, shell=True, env=os.environ.copy())
@@ -264,7 +265,8 @@ def _order_muscle_result(input_file: str, output_file: str) -> None:
             first_sequence = sequence
             break
     if first_header is None:
-        raise Exception("Missing header '" + MARK_SEQUENCE_PREFIX + "' in " + input_file)
+        raise Exception("Missing header '" + MARK_SEQUENCE_PREFIX +
+                        "' in " + input_file)
     with open(output_file, "w") as out_stream:
         out_stream.write(first_header)
         out_stream.write(first_sequence)

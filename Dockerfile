@@ -9,8 +9,7 @@ RUN apt-get -y install wget curl python2 python3 \
  && apt-get -y install python-numpy
 
 RUN addgroup --gid ${USER} user \
- && useradd --uid ${USER} --gid ${USER} user 
-
+ && useradd --uid ${USER} --gid ${USER} user
 
 WORKDIR /opt/conservation
 
@@ -33,11 +32,12 @@ COPY prepare_database.sh ./
 COPY download_database.sh ./
 COPY calculate_conservation.py ./
 
-RUN chmod a+x calculate_conservation.py \
+RUN chown user:user -R /opt/conservation \
+ && chmod a+x calculate_conservation.py \
  && chmod a+x download_database.sh \
  && chmod a+x prepare_database.sh \
  && mkdir -p /data/conservation \
- && chown user:user /data/conservation 
+ && chown user:user /data/conservation
 
 USER ${USER}:${USER}
 
