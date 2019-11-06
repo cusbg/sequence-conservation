@@ -13,11 +13,11 @@ import json
 
 MARK_SEQUENCE_PREFIX = "> query_sequence |"
 
-PSIBLAST_CMD = "/opt/ncbi-blast-2.9.0+/bin/psiblast"
-BLASTDBCMD_CMD = "/opt/ncbi-blast-2.9.0+/bin/blastdbcmd"
-CDHIT_CMD = "/opt/cd-hit-v4.8.1-2019-0228/cd-hit"
-MUSCLE_CMD = "./muscle3.8.31_i86linux64"
-JENSE_SHANNON_DIVERGANCE_DIR = "./conservation_code/"
+PSIBLAST_CMD = "/opt/conservation/ncbi-blast-2.9.0+/bin/psiblast"
+BLASTDBCMD_CMD = "/opt/conservation/ncbi-blast-2.9.0+/bin/blastdbcmd"
+CDHIT_CMD = "/opt/conservation/cd-hit-v4.8.1-2019-0228/cd-hit"
+MUSCLE_CMD = "/opt/conservation/muscle3.8.31_i86linux64"
+JENSE_SHANNON_DIVERGANCE_DIR = "/opt/conservation/conservation_code/"
 
 MIN_SEQUENCE_COUNT = 50
 
@@ -29,13 +29,13 @@ def _read_arguments() -> typing.Dict[str, str]:
         description="Compute conservation scores for given sequences.")
     parser.add_argument(
         "--input", required=True,
-        description="Input FASTA file.")
+        help="Input FASTA file.")
     parser.add_argument(
         "--output", required=True,
-        description="Output json lines file.")
+        help="Output json lines file.")
     parser.add_argument(
         "--time-limit", default=None, type=int,
-        description="Soft time limit in seconds.")
+        help="Soft time limit in seconds.")
     return vars(parser.parse_args())
 
 
@@ -71,21 +71,21 @@ def main(arguments):
         os.rename(temp_output, arguments["output"])
     finally:
         logging.info("Execution time: %1.2f s", time.time() - time_start)
-        shutil.rmtree(working_root_dir, ignore_errors=True)
+        # shutil.rmtree(working_root_dir, ignore_errors=True)
 
 
 def init_logging() -> None:
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S")
 
 
 def set_time_out(arguments):
-    if arguments["time-limit"] is None:
+    if arguments["time_limit"] is None:
         return
     global time_end_before
-    time_end_before = time.time() + arguments["time-limit"]
+    time_end_before = time.time() + arguments["time_limit"]
 
 
 def rstrip(string: str) -> str:
@@ -113,7 +113,7 @@ def _iterate_fasta_file(input_file: str, on_line=lambda line: line) \
 
 
 def compute_conservation(
-        sequence: str, header: str, working_dir: str, timeout: int):
+        sequence: str, header: str, working_dir: str):
     pdb_file = os.path.join(working_dir, "input-sequence.fasta")
     _save_sequence_to_pdb(MARK_SEQUENCE_PREFIX + header, sequence, pdb_file)
 
@@ -263,7 +263,8 @@ def _order_muscle_result(input_file: str, output_file: str) -> None:
             first_header = header[len(MARK_SEQUENCE_PREFIX):]
             first_sequence = sequence
             break
-    #
+    if first_header is None:
+        raise Exception("Missing header '" + MARK_SEQUENCE_PREFIX + "' in " + input_file)
     with open(output_file, "w") as out_stream:
         out_stream.write(first_header)
         out_stream.write(first_sequence)
