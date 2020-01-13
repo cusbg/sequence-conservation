@@ -32,64 +32,60 @@ def _read_arguments() -> typing.Dict[str, str]:
         help="Input FASTA file.")
     parser.add_argument(
         "--output", required=True,
-        help="Output json lines file.")
+        help="Output JSON-lines file.")
+    parser.add_argument(
+        "--output-raw", default=None,
+        help="Output file with raw data with '%s' "
+             "to be substituted with chain index.")
     parser.add_argument(
         "--time-limit", default=None, type=int,
-        help="Soft time limit in seconds.")
+        help="Soft time limit in seconds for running external tools.")
     return vars(parser.parse_args())
 
 
 def main(arguments):
-    init_logging()
+    _init_logging()
 
     time_start = time.time()
-    set_time_out(arguments)
+    _set_time_out(arguments)
 
     working_root_dir = tempfile.mkdtemp("", "conservation-")
     logging.info("Processing file: %s", arguments["input"])
 
-    if os.path.exists(arguments["output"]):
+    if _output_exists(arguments):
         logging.info("Output file already exists.")
         return
 
     try:
-        input_sequences = _iterate_fasta_file(arguments["input"], rstrip)
-        # We write to temp file and then move only once done.
-        temp_output = arguments["output"] + ".tmp"
-        with open(temp_output, "w", encoding="utf-8") as out_steam:
-            for index, (header, sequence) in enumerate(input_sequences):
-                working_dir = \
-                    os.path.join(working_root_dir, str(index).zfill(6))
-                os.makedirs(working_dir)
-                scores = compute_conservation(sequence, header, working_dir)
-                # Save result.
-                json.dump({
-                    "header": header,
-                    "conservation": scores
-                }, out_steam)
-                out_steam.write("\n")
-        os.rename(temp_output, arguments["output"])
+        sequences = _iterate_fasta_file(
+            arguments["input"], lambda line: line.rstrip())
+        process_sequences(sequences, working_root_dir, arguments)
     finally:
         logging.info("Execution time: %1.2f s", time.time() - time_start)
-        # shutil.rmtree(working_root_dir, ignore_errors=True)
+        shutil.rmtree(working_root_dir, ignore_errors=True)
 
 
-def init_logging() -> None:
+def _output_exists(arguments) -> bool:
+    if not os.path.exists(arguments["output"]):
+        return False
+    if arguments["output-raw"] is not None and \
+            not os.path.exists(arguments["output-raw"]):
+        return False
+    return True
+
+
+def _init_logging() -> None:
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S")
 
 
-def set_time_out(arguments):
+def _set_time_out(arguments):
     if arguments["time_limit"] is None:
         return
     global time_end_before
     time_end_before = time.time() + arguments["time_limit"]
-
-
-def rstrip(string: str) -> str:
-    return string.rstrip()
 
 
 def _iterate_fasta_file(input_file: str, on_line=lambda line: line) \
@@ -112,18 +108,54 @@ def _iterate_fasta_file(input_file: str, on_line=lambda line: line) \
         yield header, sequence
 
 
+def process_sequences(
+        sequences: typing.Iterable[typing.Tuple[str, str]],
+        working_root_dir: str, arguments) -> None:
+    global time_end_before
+    # We write to temp file and then move only once done.
+    temp_output = arguments["output"] + ".tmp"
+    with open(temp_output, "w", encoding="utf-8") as out_steam:
+        for index, (header, sequence) in enumerate(sequences):
+            if time_end_before < time.time():
+                raise TimeoutError()
+            working_dir = \
+                os.path.join(working_root_dir, str(index).zfill(6))
+            os.makedirs(working_dir)
+            result = compute_conservation(sequence, header, working_dir)
+            if result["file"] is None:
+                _on_fail_to_compute(header, out_steam)
+                continue
+            # Save result into JSON.
+            json.dump({
+                "header": header,
+                "database": result["database"],
+                "conservation": _load_conservation_result_file(result["file"])
+            }, out_steam)
+            out_steam.write("\n")
+            # Save RAW file.
+            if arguments["output-raw"] is not None:
+                os.rename(result["file"], arguments["output-raw"].format(index))
+
+    os.rename(temp_output, arguments["output"])
+
+
 def compute_conservation(
-        sequence: str, header: str, working_dir: str):
+        sequence: str, header: str, working_dir: str) -> typing.Dict:
     pdb_file = os.path.join(working_dir, "input-sequence.fasta")
     _save_sequence_to_pdb(MARK_SEQUENCE_PREFIX + header, sequence, pdb_file)
 
     blast_output_file = os.path.join(working_dir, "blast-output")
     _blast_sequence(pdb_file, "swissprot", blast_output_file, working_dir)
+    used_database = "swissprot"
     if not _enough_blast_results(blast_output_file, MIN_SEQUENCE_COUNT):
         _blast_sequence(pdb_file, "uniref90", blast_output_file, working_dir)
+        used_database = "uniref90"
         if not _enough_blast_results(blast_output_file, MIN_SEQUENCE_COUNT):
             logging.error("Not enough sequences found!")
-            return
+            return {
+                "file": None,
+                "database": None
+            }
 
     muscle_output_file = os.path.join(working_dir, "muscle-output")
     _execute_muscle(
@@ -133,8 +165,11 @@ def compute_conservation(
     _order_muscle_result(muscle_output_file, conservation_input_file)
 
     conservation_output_file = os.path.join(working_dir, "conservation-output")
-    return _execute_jensen_shannon_divergence(
-        conservation_input_file, conservation_output_file)
+    return {
+        "file": _execute_jensen_shannon_divergence(
+            conservation_input_file, conservation_output_file),
+        "database": used_database
+    }
 
 
 def _blast_sequence(
@@ -234,8 +269,7 @@ def _enough_blast_results(fasta_file: str, min_count: int) -> bool:
 
 
 def _execute_muscle(
-        pdb_file: str, sequence_file: str,
-        output_file: str, working_dir: str) \
+        pdb_file: str, sequence_file: str, output_file: str, working_dir: str) \
         -> None:
     muscle_input = os.path.join(working_dir, "muscle-input")
     _merge_files([sequence_file, pdb_file], muscle_input)
@@ -278,7 +312,7 @@ def _order_muscle_result(input_file: str, output_file: str) -> None:
 
 
 def _execute_jensen_shannon_divergence(
-        input_file: str, output_file: str) -> typing.List[float]:
+        input_file: str, output_file: str) -> str:
     """Input sequence must be on the first position."""
     cmd = "cd {} && python2 score_conservation.py {} > {}".format(
         JENSE_SHANNON_DIVERGANCE_DIR,
@@ -287,10 +321,18 @@ def _execute_jensen_shannon_divergence(
     logging.info("Executing Jense Shannon Divergence script ...")
     logging.debug("Executing command:\n%s", cmd)
     _execute(cmd)
-    return _load_jensen_shannon_divergence_result(output_file)
+    return output_file
 
 
-def _load_jensen_shannon_divergence_result(conservation_output: str) \
+def _on_fail_to_compute(header: str, out_steam) -> None:
+    json.dump({
+        "header": header,
+        "error": "Not enough BLAST results."
+    }, out_steam)
+    out_steam.write("\n")
+
+
+def _load_conservation_result_file(conservation_output: str) \
         -> typing.List[float]:
     """
     Return conservation for first sequence in input.
