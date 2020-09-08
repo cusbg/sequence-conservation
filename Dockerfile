@@ -2,11 +2,10 @@ FROM debian:buster-slim
 
 ARG USER=5988
 
-RUN apt-get update
-
-RUN apt-get -y install wget curl python2 python3 \
+RUN apt-get update \
+ && apt-get -y install wget curl python2 python3 \
  && apt-get -y install make g++ zlib1g-dev \
- && apt-get -y install python-numpy
+ && apt-get -y install python-numpy 
 
 RUN addgroup --gid ${USER} user \
  && useradd --uid ${USER} --gid ${USER} user
