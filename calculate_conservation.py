@@ -116,7 +116,7 @@ def process_sequences(
     temp_output = arguments["output"] + ".tmp"
     with open(temp_output, "w", encoding="utf-8") as out_steam:
         for index, (header, sequence) in enumerate(sequences):
-            if time_end_before < time.time():
+            if time_end_before is not None and time_end_before < time.time():
                 raise TimeoutError()
             working_dir = \
                 os.path.join(working_root_dir, str(index).zfill(6))
@@ -133,7 +133,7 @@ def process_sequences(
             }, out_steam)
             out_steam.write("\n")
             # Save RAW file.
-            if arguments["output-raw"] is not None:
+            if arguments.get("output-raw", None) is not None:
                 os.rename(result["file"], arguments["output-raw"].format(index))
 
     os.rename(temp_output, arguments["output"])
